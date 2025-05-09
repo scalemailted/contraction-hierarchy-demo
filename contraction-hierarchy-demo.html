@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Contraction Hierarchies – Interactive Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      height: 100vh;
+    }
+    #controls { width: 260px; padding: 12px; border-right: 1px solid #d0d0d0; overflow-y: auto; }
+    #canvasContainer { flex: 1; position: relative; }
+    canvas { width: 100%; height: 100%; background:#fafafa; cursor:crosshair; display:block; }
+    h2,h3{margin-top:0}
+    input,button{width:100%;padding:6px 8px;margin-top:6px;font-size:14px}
+    button{cursor:pointer}
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <h1>Contraction Hierarchies</h1>
+    <h2>Network Builder</h2>
+    <p>
+      ➤ <b>Click</b> canvas to add nodes.<br>
+      ➤ <b>Drag</b> between nodes to add edges (cost = Euclidean distance).<br>
+      ➤ <b>Pre‑process</b> builds the contraction hierarchy.<br>
+      Shortcuts are internal; final paths are auto‑unpacked to original edges.
+    </p>
+    <button id="btnPreprocess">Pre‑process Graph</button>
+    <h3>Query</h3>
+    <label>Start ID</label><input id="startNode" type="number" min="0">
+    <label>End ID</label><input id="endNode" type="number" min="0">
+    <button id="btnFind">Find Path</button>
+    <p id="status"></p>
+  </div>
+  <div id="canvasContainer"><canvas id="graphCanvas"></canvas></div>
+<script>
+'use strict';
+/**************  Min‑heap  **************/
+class MinHeap{constructor(){this.d=[]}isEmpty(){return!this.d.length}push(x){this.d.push(x);this._up(this.d.length-1)}pop(){if(this.isEmpty())return null;const r=this.d[0],e=this.d.pop();if(!this.isEmpty()){this.d[0]=e;this._down(0)}return r}_up(i){while(i){const p=i-1>>1;if(this.d[p].cost<=this.d[i].cost)break;[this.d[p],this.d[i]]=[this.d[i],this.d[p]];i=p}}_down(i){for(let n=this.d.length;;){let s=i,l=i*2+1,r=i*2+2;l<n&&this.d[l].cost<this.d[s].cost&&(s=l);r<n&&this.d[r].cost<this.d[s].cost&&(s=r);if(s===i)break;[this.d[i],this.d[s]]=[this.d[s],this.d[i]];i=s}}}
+/**************  Graph primitives  **************/
+class Node{constructor(id,x,y){this.id=id;this.x=x;this.y=y;this.edges=[];this.order=undefined}}
+class Edge{constructor(fr,to,cost,shortcut=false,via=null){this.from=fr;this.to=to;this.cost=cost;this.shortcut=shortcut;this.via=via}}
+class Graph{constructor(){this.nodes=[]}addNode(x,y){const n=new Node(this.nodes.length,x,y);this.nodes.push(n);return n}addEdge(a,b,cost,shortcut=false,via=null){const e1=new Edge(a,b,cost,shortcut,via),e2=new Edge(b,a,cost,shortcut,via);a.edges.push(e1);b.edges.push(e2)}getNode(id){return this.nodes[id]}}
+/**************  Contraction Hierarchy  **************/
+class ContractionHierarchy{constructor(g){this.g=g;this.contracted=new Set();this.order=0}preprocess(){const total=this.g.nodes.length;while(this.contracted.size<total){const v=this.g.nodes.filter(n=>!this.contracted.has(n.id)).sort((a,b)=>a.edges.length-b.edges.length)[0];this._contract(v)}}_contract(v){v.order=this.order++;const neigh=v.edges.map(e=>e.to);for(let i=0;i<neigh.length;i++){for(let j=i+1;j<neigh.length;j++){const n1=neigh[i],n2=neigh[j];const viaCost=this._cost(n1,v)+this._cost(v,n2);const witness=this._witness(n1,n2,v,viaCost);if(viaCost<witness){this.g.addEdge(n1,n2,viaCost,true,v)}}}this.contracted.add(v.id)}_cost(a,b){const e=a.edges.find(e=>e.to===b);return e?e.cost:Infinity}_witness(s,t,banned,maxC){const pq=new MinHeap();const dist=new Map();pq.push({node:s,cost:0});dist.set(s,0);while(!pq.isEmpty()){const {node,cost}=pq.pop();if(cost>maxC)return Infinity;if(node===t)return cost;if(cost!==dist.get(node))continue;for(const e of node.edges){if(e.to===banned||this.contracted.has(e.to.id))continue;const nd=cost+e.cost;if(nd<(dist.get(e.to)||Infinity)){dist.set(e.to,nd);pq.push({node:e.to,cost:nd})}}}return Infinity}}
+/**************  Bidirectional query + unpack  **************/
+class CHQuery{constructor(g){this.g=g}path(sId,tId){const s=this.g.getNode(sId),t=this.g.getNode(tId);if(!s||!t)return null;const distF=new Map(),distB=new Map(),prevF=new Map(),prevB=new Map(),pqF=new MinHeap(),pqB=new MinHeap();distF.set(s,0);distB.set(t,0);pqF.push({node:s,cost:0});pqB.push({node:t,cost:0});let best={cost:Infinity,meet:null};const relax=(cur,cost,dist,pq,prev)=>{for(const e of cur.edges){if(e.to.order<=cur.order)continue;const nd=cost+e.cost;if(nd<(dist.get(e.to)||Infinity)){dist.set(e.to,nd);prev.set(e.to,{from:cur,edge:e});pq.push({node:e.to,cost:nd})}}};while(!pqF.isEmpty()||!pqB.isEmpty()){if(!pqF.isEmpty()){const {node,cost}=pqF.pop();if(cost===distF.get(node)){if(distB.has(node)&&cost+distB.get(node)<best.cost)best={cost:cost+distB.get(node),meet:node};relax(node,cost,distF,pqF,prevF)}}if(!pqB.isEmpty()){const {node,cost}=pqB.pop();if(cost===distB.get(node)){if(distF.has(node)&&cost+distF.get(node)<best.cost)best={cost:cost+distF.get(node),meet:node};relax(node,cost,distB,pqB,prevB)}}}if(!best.meet)return null;const compactF=[];let cur=best.meet;while(cur!==s){const obj=prevF.get(cur);compactF.push({node:cur,edge:obj.edge});cur=obj.from}compactF.push({node:s});compactF.reverse();const compactB=[];cur=best.meet;while(cur!==t){const obj=prevB.get(cur);cur=obj.from;compactB.push({node:cur,edge:obj.edge})};const compact=[...compactF,...compactB];const expandedNodes=[];for(let i=0;i<compact.length-1;i++){this._expand(compact[i].node,compact[i+1].node,expandedNodes,true)}return{cost:best.cost,nodes:expandedNodes}}_expand(u,v,out,first){const e=u.edges.find(e=>e.to===v);if(e&&e.shortcut&&e.via){this._expand(u,e.via,out,first);this._expand(e.via,v,out,false)}else{if(first||out[out.length-1]!==u)out.push(u);out.push(v)}}}
+/**************  Canvas interaction  **************/
+const graph=new Graph();let ch=null,query=null,current=null;const canvas=document.getElementById('graphCanvas'),ctx=canvas.getContext('2d');let W,H;const resize=()=>{W=canvas.width=canvas.clientWidth;H=canvas.height=canvas.clientHeight;draw()};window.addEventListener('resize',resize);
+let drag=null,tmp=null;const pos=e=>{const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}};const nodeAt=(x,y)=>graph.nodes.find(n=>Math.hypot(n.x-x,n.y-y)<8);
+canvas.addEventListener('mousedown',e=>{const {x,y}=pos(e);const n=nodeAt(x,y);if(n)drag=n;else{graph.addNode(x,y);draw()}});canvas.addEventListener('mousemove',e=>{if(!drag)return;tmp=pos(e);draw()});canvas.addEventListener('mouseup',e=>{if(!drag)return;const {x,y}=pos(e);const t=nodeAt(x,y);if(t&&t!==drag){const c=Math.hypot(t.x-drag.x,t.y-drag.y);graph.addEdge(drag,t,c)}drag=null;tmp=null;draw()});
+const draw=()=>{ctx.clearRect(0,0,W,H);ctx.lineWidth=2;for(const n of graph.nodes){for(const e of n.edges){if(e.from.id<e.to.id){ctx.strokeStyle=e.shortcut?'#bbb':'#666';ctx.beginPath();ctx.moveTo(e.from.x,e.from.y);ctx.lineTo(e.to.x,e.to.y);ctx.stroke()}}}if(current){ctx.strokeStyle='#e63946';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(current.nodes[0].x,current.nodes[0].y);for(let i=1;i<current.nodes.length;i++)ctx.lineTo(current.nodes[i].x,current.nodes[i].y);ctx.stroke();ctx.lineWidth=2;}for(const n of graph.nodes){ctx.fillStyle='#fff';ctx.strokeStyle='#000';ctx.beginPath();ctx.arc(n.x,n.y,6,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#000';ctx.font='10px sans-serif';ctx.fillText(n.id,n.x+8,n.y-8);}if(drag&&tmp){ctx.setLineDash([4,4]);ctx.strokeStyle='#0a84ff';ctx.beginPath();ctx.moveTo(drag.x,drag.y);ctx.lineTo(tmp.x,tmp.y);ctx.stroke();ctx.setLineDash([])}};
+/**************  Buttons  **************/
+const stat=document.getElementById('status');document.getElementById('btnPreprocess').addEventListener('click',()=>{if(graph.nodes.length<2)return;stat.textContent='Pre‑processing…';setTimeout(()=>{ch=new ContractionHierarchy(graph);ch.preprocess();query=new CHQuery(graph);stat.textContent='Pre‑processing complete ✔';draw()},20)});
+document.getElementById('btnFind').addEventListener('click',()=>{if(!query){stat.textContent='Run preprocessing first';return;}const s=+document.getElementById('startNode').value,t=+document.getElementById('endNode').value;if(Number.isNaN(s)||Number.isNaN(t)){stat.textContent='Enter IDs';return;}const res=query.path(s,t);if(!res){stat.textContent='No path';current=null}else{stat.textContent=`Distance: ${res.cost.toFixed(1)} – nodes in route: ${res.nodes.length}`;current=res;}draw()});
+resize();
+</script>
+</body>
+</html>
